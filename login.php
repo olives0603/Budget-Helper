@@ -1,144 +1,146 @@
 <?php
 // PHP shows the page; Python checks the form when it is submitted.
-$title = "BudgetWise | Log In";
-?>
+// Set the title shown in the browser tab.
+$title = "BudgetWise | Log In"; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <!-- The title appears in the browser tab. -->
-    <meta charset="UTF-8">
+        <meta charset="UTF-8">
+    <!-- Let the layout use the actual screen width on phones and tablets. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo htmlspecialchars($title, ENT_QUOTES, "UTF-8"); ?></title>
 
     <style>
-        /* Colors, spacing, and layout for this page. */
-        * {
-            box-sizing: border-box;
-        }
+/* Colors, spacing, and layout for this page. */
+* {
+  box-sizing: border-box;
+}
 
-        body {
-            font-family: Arial,sans-serif;
-            background: #f4f7f2;
-            color: #203b30;
-            min-height: 100vh;
-            margin: 0;
-            padding: 24px;
-            display: grid;
-            place-items: center;
-        }
+body {
+  font-family: Arial, sans-serif;
+  background: #f4f7f2;
+  color: #203b30;
+  min-height: 100vh;
+  margin: 0;
+  padding: 24px;
+  display: grid;
+  place-items: center;
+}
 
-        main {
-            width: 100%;
-            max-width: 420px;
-            padding: 36px;
-            background: white;
-            border: 1px solid #dce7dd;
-            border-radius: 20px;
-            box-shadow: 0 12px 36px rgba(32,59,48,.08);
-        }
+main {
+  width: 100%;
+  max-width: 420px;
+  padding: 36px;
+  background: white;
+  border: 1px solid #dce7dd;
+  border-radius: 20px;
+  box-shadow: 0 12px 36px rgba(32, 59, 48, 0.08);
+}
 
-        .brand {
-            color: #28734f;
-            font-weight: bold;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-        }
+.brand {
+  color: #28734f;
+  font-weight: bold;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
 
-        h1 {
-            font-size: 28px;
-        }
+h1 {
+  font-size: 28px;
+}
 
-        .subtitle {
-            color: #607268;
-            line-height: 1.6;
-        }
+.subtitle {
+  color: #607268;
+  line-height: 1.6;
+}
 
-        label {
-            display: block;
-            font-weight: bold;
-            margin-top: 18px;
-        }
+label {
+  display: block;
+  font-weight: bold;
+  margin-top: 18px;
+}
 
-        input {
-            width: 100%;
-            padding: 13px;
-            margin-top: 8px;
-            border: 1px solid #b9cbbf;
-            border-radius: 8px;
-            background: #fafcf9;
-            font: inherit;
-        }
+input {
+  width: 100%;
+  padding: 13px;
+  margin-top: 8px;
+  border: 1px solid #b9cbbf;
+  border-radius: 8px;
+  background: #fafcf9;
+  font: inherit;
+}
 
-        input:focus {
-            outline: 3px solid #cce7d7;
-            border-color: #28734f;
-        }
+input:focus {
+  outline: 3px solid #cce7d7;
+  border-color: #28734f;
+}
 
-        button,.create-account {
-            width: 100%;
-            padding: 14px;
-            margin-top: 20px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-        }
+button,
+.create-account {
+  width: 100%;
+  padding: 14px;
+  margin-top: 20px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+}
 
-        button {
-            background: #28734f;
-            color: white;
-            border: none;
-        }
+button {
+  background: #28734f;
+  color: white;
+  border: none;
+}
 
-        button:hover {
-            background: #1d583c;
-        }
+button:hover {
+  background: #1d583c;
+}
 
-        button:disabled {
-            opacity: .65;
-            cursor: wait;
-        }
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
 
-        .create-account {
-            display: block;
-            text-align: center;
-            text-decoration: none;
-            color: #28734f;
-            border: 1px solid #28734f;
-        }
+.create-account {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  color: #28734f;
+  border: 1px solid #28734f;
+}
 
-        .create-account:hover {
-            background: #edf6ef;
-        }
+.create-account:hover {
+  background: #edf6ef;
+}
 
-        button:focus-visible,a:focus-visible {
-            outline: 3px solid #28734f;
-            outline-offset: 3px;
-        }
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #28734f;
+  outline-offset: 3px;
+}
 
-        .error {
-            background: #fff1f0;
-            color: #a32929;
-            padding: 12px;
-            border-radius: 8px;
-        }
+.error {
+  background: #fff1f0;
+  color: #a32929;
+  padding: 12px;
+  border-radius: 8px;
+}
 
-        .footer {
-            color: #607268;
-            text-align: center;
-            font-size: 13px;
-            margin-top: 24px;
-        }
+.footer {
+  color: #607268;
+  text-align: center;
+  font-size: 13px;
+  margin-top: 24px;
+}
 
-    </style>
+</style>
 </head>
-<body>
+<body data-form="login">
+    <!-- The page layout is served by Apache; the form is checked by app.py. -->
     <main>
-        <!-- Page heading. -->
-        <p class="brand">BudgetBuddy</p>
+                <p class="brand">BudgetWise</p>
         <h1>Welcome back</h1>
         <p class="subtitle">
-            Log in to your account.
+            Log in to manage your budget.
         </p>
 
         <!-- Show errors here without leaving the page. -->
@@ -174,106 +176,115 @@ $title = "BudgetWise | Log In";
         <a class="create-account" href="/practice/account_creation.php">
             Create an Account
         </a>
-        <p class="footer">The #1 Budgeting App..</p>
+        <p class="footer">Plan your spending. Build your savings.</p>
     </main>
 
     <script>
-        "use strict";
+// Shared by login.php and account_creation.php.
+"use strict";
 
-        // Both forms use the Python server on port 5000.
-        const isRegistration = false;
-        const backend = new URL(window.location.href);
-        backend.port = "5000";
-        const apiOrigin = backend.origin;
-        const endpoint = isRegistration ? "/api/register" : "/api/login";
+// Both forms use the Python server on port 5000.
+const isRegistration = document.body.dataset.form === "register";
+const backend = new URL(window.location.href);
+backend.port = "5000";
+const apiOrigin = backend.origin;
+const endpoint = isRegistration ? "/api/register" : "/api/login";
 
-        const form = document.getElementById("login-form");
-        const errorMessage = document.getElementById("login-error");
-        const submitButton = form.querySelector('button[type="submit"]');
-        const originalLabel = submitButton.textContent;
+// Keep references to the form and its message box so we can update them after a reply.
+const form = document.querySelector("form");
+const errorMessage = document.querySelector("[role=alert]");
+const submitButton = form.querySelector('button[type="submit"]');
+const originalLabel = submitButton.textContent;
 
-        function showError(message) {
-            // Show the message as text so it cannot insert HTML into the page.
-            errorMessage.textContent = message;
-            errorMessage.hidden = false;
-        }
+// Show login or registration errors here instead of opening an error page.
+function showError(message) {
+  // Show the message as text so it cannot insert HTML into the page.
+  errorMessage.textContent = message;
+  errorMessage.hidden = false;
+}
 
-        // Keep the user on this page while Python checks the form.
-        form.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            errorMessage.hidden = true;
-            errorMessage.textContent = "";
-            const formData = new FormData(form);
+// Keep the user on this page while Python checks the form.
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  errorMessage.hidden = true;
+  errorMessage.textContent = "";
+  // The input names become the field names Python reads from request.form.
+  const formData = new FormData(form);
 
-            // Catch mismatched passwords before sending the form.
-            // Python checks them again on the server.
-            if (
-                isRegistration &&
-                formData.get("password") !== formData.get("confirm_password")
-            ) {
-                showError("Passwords do not match.");
-                return;
-            }
+  // Catch mismatched passwords before sending the form.
+  // Python checks them again on the server.
+  if (
+    isRegistration &&
+    formData.get("password") !== formData.get("confirm_password")
+  ) {
+    showError("Passwords do not match.");
+    return;
+  }
 
-            submitButton.disabled = true;
-            submitButton.textContent = isRegistration
-                ? "Creating account..."
-                : "Checking...";
+  // Prevent another click from sending the same form while this request is running.
+  submitButton.disabled = true;
+  submitButton.textContent = isRegistration
+    ? "Creating account..."
+    : "Checking...";
 
-            try {
-                // Get the token Python expects with this form.
-                // Include cookies so it recognizes the same browser session.
-                const tokenResponse = await fetch(apiOrigin + "/api/csrf", {
-                    credentials: "include",
-                    cache: "no-store"
-                });
+  try {
+    // Get the token Python expects with this form.
+    // Include cookies so it recognizes the same browser session.
+    const tokenResponse = await fetch(apiOrigin + "/api/csrf", {
+      credentials: "include",
+      cache: "no-store",
+    });
 
-                if (!tokenResponse.ok) {
-                    throw new Error(
-                        "The Python server returned HTTP " + tokenResponse.status +
-                        ". Restart the updated app.py."
-                    );
-                }
-                const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok) {
+      throw new Error(
+        "The Python server returned HTTP " +
+          tokenResponse.status +
+          ". Restart the updated app.py.",
+      );
+    }
+    const tokenData = await tokenResponse.json();
 
-                // Send the entered details and token to Python.
-                const response = await fetch(apiOrigin + endpoint, {
-                    method: "POST",
-                    body: formData,
-                    credentials: "include",
-                    headers: {"X-CSRF-Token": tokenData.csrf_token}
-                });
+    // Send the entered details and token to Python.
+    const response = await fetch(apiOrigin + endpoint, {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+      headers: { "X-CSRF-Token": tokenData.csrf_token },
+    });
 
-                const contentType = response.headers.get("content-type") || "";
-                if (!contentType.includes("application/json")) {
-                    throw new Error(
-                        "The server returned an unexpected response. " +
-                        "Restart the updated app.py."
-                    );
-                }
-                const result = await response.json();
+    // A normal API reply is JSON. An HTML error page usually means the server is wrong.
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        "The server returned an unexpected response. " +
+          "Restart the updated app.py.",
+      );
+    }
+    const result = await response.json();
 
-                // Move to the next page if it worked. Otherwise, show the error here.
-                if (response.ok && result.success) {
-                    window.location.href = isRegistration
-                        ? "/practice/login.php"
-                        : apiOrigin + "/api/dashboard";
-                    return;
-                }
-                showError(result.message || "Unable to process your request.");
-            } catch (error) {
-                // Explain when the server cannot be reached.
-                const message = error instanceof TypeError
-                    ? "Cannot reach Python on port 5000. " +
-                      "Start app.py and keep its terminal open."
-                    : error.message;
-                showError(message);
-            } finally {
-                // Turn the button back on so the user can try again.
-                submitButton.disabled = false;
-                submitButton.textContent = originalLabel;
-            }
-        });
-    </script>
+    // Move to the next page if it worked. Otherwise, show the error here.
+    if (response.ok && result.success) {
+      window.location.href = isRegistration
+        ? "/practice/login.php"
+        : "/practice/dashboard.php";
+      return;
+    }
+    showError(result.message || "Unable to process your request.");
+  } catch (error) {
+    // Explain when the server cannot be reached.
+    const message =
+      error instanceof TypeError
+        ? "Cannot reach Python on port 5000. " +
+          "Start app.py and keep its terminal open."
+        : error.message;
+    showError(message);
+  } finally {
+    // Turn the button back on so the user can try again.
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
+</script>
 </body>
 </html>
