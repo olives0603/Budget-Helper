@@ -7,11 +7,11 @@ $page = "income";
 // The dashboard menu keeps a place for the sections we will build later.
 header("Cache-Control: no-store");
 
-// Income is ready too. The remaining sections will be added later.
+// Keep unfinished sections visible until their pages are ready.
 $navigation = [
     "dashboard" => ["Dashboard", "dashboard.php"],
     "income" => ["Income", "income.php"],
-    "expenses" => ["Expenses", null],
+    "expenses" => ["Expenses", "expenses.php"],
     "statistics" => ["Statistics", null],
     "goals" => ["Savings goals", null],
     "account" => ["Account management", null],

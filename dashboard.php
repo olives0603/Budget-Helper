@@ -614,7 +614,7 @@ td {
         <nav aria-label="Main navigation">
             <a href="dashboard.php" aria-current="page">Dashboard</a>
             <a href="income.php">Income</a>
-            <span class="nav-placeholder" aria-disabled="true">Expenses <small>Later</small></span>
+            <a href="expenses.php">Expenses</a>
             <span class="nav-placeholder" aria-disabled="true">Statistics <small>Later</small></span>
             <span class="nav-placeholder" aria-disabled="true">Savings goals <small>Later</small></span>
             <span class="nav-placeholder" aria-disabled="true">Account management <small>Later</small></span>
@@ -642,7 +642,7 @@ td {
             <div id="page-content" hidden>
 
 <!-- Open the income form without waiting for a report to load. -->
-<p><a class="button" href="income.php">Manage income</a></p>
+<p><a class="button" href="income.php">Manage income</a> <a class="button" href="expenses.php">Manage expenses</a></p>
 
 <!-- Pick a calendar week, month, or year using a date inside that period. -->
 <div class="report-toolbar">
@@ -863,17 +863,18 @@ function renderReport(data) {
       limit.category,
       limit.spent_cents,
       limit.amount_cents,
-      left >= 0
-        ? `${money(left)} left in this ${data.period} limit`
-        : `${money(-left)} over this ${data.period} limit`,
-      left < 0,
+      limit.status === "over" ? `Over limit by ${money(-left)}` :
+      limit.status === "reached" ? "Limit reached." :
+      limit.status === "near" ? `Near limit: ${money(left)} left.` :
+      `${money(left)} left in this ${data.period} limit`,
+      limit.status !== "within",
     );
   }
   if (!data.limits.length)
     emptyState(
       limits,
       `No ${data.period} limits set`,
-      "Saved limits will appear here when the spending section is connected.",
+      "Set a limit on the Expenses page to track this period.",
     );
 
   const bills = document.getElementById("bills-list");
@@ -883,7 +884,7 @@ function renderReport(data) {
   const overdue = document.getElementById("overdue-note");
   overdue.hidden = !data.overdue_count;
   overdue.textContent = `${data.overdue_count} overdue ${data.overdue_count === 1 ? "bill" : "bills"}.`;
-  for (const bill of data.bills) {
+  for (const bill of [...data.overdue_bills, ...data.bills]) {
     const row = element("div", undefined, "data-row");
     const line = element("div", undefined, "row-line");
     line.append(
@@ -892,11 +893,11 @@ function renderReport(data) {
     );
     row.append(
       line,
-      element("p", `Due ${calendarLabel(bill.due_date)}`, "hint"),
+      element("p", `${bill.status} · ${calendarLabel(bill.due_date)}`, bill.status === "Upcoming" ? "hint" : "hint danger"),
     );
     bills.append(row);
   }
-  if (!data.bills.length)
+  if (!data.bills.length && !data.overdue_count)
     emptyState(
       bills,
       "No upcoming bills recorded",
@@ -918,7 +919,7 @@ function renderReport(data) {
     emptyState(
       categories,
       "No spending to break down yet",
-      "Saved expenses will appear here when the expenses section is connected.",
+      "Add an expense on the Expenses page to see spending by category.",
     );
 }
 // Fetch a fresh report whenever the date, period, or Refresh button changes it.
