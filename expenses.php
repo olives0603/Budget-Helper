@@ -12,7 +12,8 @@ $navigation = [
     "dashboard" => ["Dashboard", "dashboard.php"],
     "income" => ["Income", "income.php"],
     "expenses" => ["Expenses", "expenses.php"],
-    "statistics" => ["Statistics", null],
+    "statistics" => ["Statistics", "statistics.php"],
+    "subscriptions" => ["Subscriptions", "subscriptions.php"],
     "goals" => ["Savings goals", null],
     "account" => ["Account management", null],
 ];

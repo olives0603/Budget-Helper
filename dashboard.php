@@ -615,7 +615,8 @@ td {
             <a href="dashboard.php" aria-current="page">Dashboard</a>
             <a href="income.php">Income</a>
             <a href="expenses.php">Expenses</a>
-            <span class="nav-placeholder" aria-disabled="true">Statistics <small>Later</small></span>
+            <a href="statistics.php">Statistics</a>
+            <a href="subscriptions.php">Subscriptions</a>
             <span class="nav-placeholder" aria-disabled="true">Savings goals <small>Later</small></span>
             <span class="nav-placeholder" aria-disabled="true">Account management <small>Later</small></span>
         </nav>

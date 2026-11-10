@@ -6,6 +6,8 @@ Run python app.py, then open http://localhost/practice/login.php.
 # Page guide: search for a PHP filename below to find its Python routes.
 # account_creation.php and login.php handle sign-up and sign-in.
 # income.php and expenses.php save entries; dashboard.php reads their totals.
+# statistics.php groups saved expenses into category totals for its three views.
+# subscriptions.php manages the expense rows marked as Subscriptions.
 
 # App settings
 import re
@@ -76,6 +78,7 @@ def connect_db():
 
 def initialize_database():
     """Create any missing tables without changing existing accounts or entries."""
+    # Create missing tables when the app starts. Existing rows stay in place.
     connection = connect_db()
     try:
         with connection:
@@ -110,6 +113,7 @@ def initialize_database():
 
 def initialize_finance_tables():
     """Add the new sections while keeping existing users and income records."""
+    # Older copies of users.db may not have the newer columns yet. Add only what is missing.
     db = connect_db()
     try:
         with db:
@@ -191,6 +195,7 @@ def valid_email(email):
 
 
 def valid_password_length(password):
+    # Use the same length rule during registration and login.
     return 8 <= len(password) <= 128
 
 
@@ -201,6 +206,7 @@ def error_response(message, status=400):
 
 # Dates arrive as YYYY-MM-DD strings from the browser's date fields.
 def calendar_date(value):
+    # Check the format first, then let Python reject impossible dates such as February 30.
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
         raise ValueError("Choose a valid date.")
     result = date.fromisoformat(value)
@@ -211,6 +217,7 @@ def calendar_date(value):
 
 def signed_in_user_exists(connection):
     # Use the account from the session, not an ID someone typed into the form.
+    # A session can outlive a deleted account, so check that the user still exists.
     user_id = session.get("user_id")
     if user_id is None:
         return False
@@ -242,6 +249,7 @@ def protect_form_submissions():
 @app.after_request
 def private_responses(response):
     """Tell the browser not to save these responses or guess their file type."""
+    # These replies contain account information, so ask the browser not to cache them.
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
@@ -350,6 +358,7 @@ def login():
 # --------------------------------------------------------------------
 @app.get("/api/account")
 def account_details():
+    # Only return the email needed by the page header. Never send back the password hash.
     db = connect_db()
     try:
         if not signed_in_user_exists(db):
@@ -365,12 +374,14 @@ def account_details():
 @app.post("/logout")
 @app.post("/api/logout")
 def logout():
+    # Forget this browser's login, then send it back to the PHP login page.
     session.clear()
     return redirect(LOGIN_PAGE)
 
 
 # Form helpers for income and expenses. The same money check also applies to bills and limits.
 def money_cents(value, allow_zero=False):
+    # Accept ordinary prices like 12 or 12.99. Zero is allowed only for amount filters.
     value = value.strip()
     if not re.fullmatch(r"[0-9]{1,9}(?:\.[0-9]{1,2})?", value):
         raise ValueError("Enter an amount using numbers and up to two decimal places.")
@@ -384,6 +395,7 @@ def money_cents(value, allow_zero=False):
 
 # Both Add and Edit use these checks, so neither route can skip validation.
 def income_fields():
+    # Read all the fields together so Add and Edit follow the same rules.
     source = request.form.get("source", "").strip()
     if not source or len(source) > 120:
         raise ValueError("Enter a source between 1 and 120 characters.")
@@ -398,6 +410,7 @@ def income_fields():
 # Income and expenses use the same date, amount, and recurring filters.
 # Column names come from the two routes below, never from the form.
 def record_filters(date_column, prefix=""):
+    # Each filter adds a SQL condition and its value. The values fill the ? placeholders.
     clauses, values = [f"{prefix}user_id = ?"], [session["user_id"]]
     period = request.args.get("period", "all")
     if period not in ("all", "week", "month", "year", "custom"):
@@ -444,6 +457,7 @@ def record_filters(date_column, prefix=""):
 # --------------------------------------------------------------------
 @app.get("/api/income")
 def income_list():
+    # Read this account's matching entries; a search does not change anything in the database.
     db = connect_db()
     try:
         if not signed_in_user_exists(db):
@@ -475,6 +489,7 @@ def income_list():
 @app.post("/api/income")
 @app.post("/api/income/<int:entry_id>/edit")
 def save_income(entry_id=None):
+    # One route adds an entry and the other supplies an ID to edit. Both use this function.
     db = connect_db()
     try:
         if not signed_in_user_exists(db):
@@ -509,6 +524,7 @@ def save_income(entry_id=None):
 # Delete only a row belonging to this session; guessing another ID is not enough.
 @app.post("/api/income/<int:entry_id>/delete")
 def delete_income(entry_id):
+    # Deleting a row changes later dashboard totals because reports read the saved entries.
     db = connect_db()
     try:
         if not signed_in_user_exists(db):
@@ -544,6 +560,7 @@ PERIODS = ("weekly", "monthly", "yearly")
 
 
 def form_text(key, label, maximum):
+    # Trim accidental spaces, then reject blank or overly long names and descriptions.
     value = request.form.get(key, "").strip()
     if not value or len(value) > maximum:
         raise ValueError(f"Enter {label} (up to {maximum} characters).")
@@ -551,12 +568,14 @@ def form_text(key, label, maximum):
 
 
 def category_value(value):
+    # Accept only the categories offered by the form, even if someone submits a different value.
     if value not in CATEGORIES:
         raise ValueError("Choose a spending category.")
     return value
 
 
 def checkbox(key):
+    # The page sends checkboxes as 0 or 1. Reject other values instead of guessing.
     value = request.form.get(key, "0")
     if value not in ("0", "1"):
         raise ValueError("Choose yes or no.")
@@ -566,6 +585,7 @@ def checkbox(key):
 # Expense list: include the reminder if one exists, and still show payments without one.
 @app.get("/api/expenses")
 def expense_list():
+    # The left join keeps expenses in the list even when they do not have a bill reminder.
     with closing(connect_db()) as db:
         if not signed_in_user_exists(db):
             return error_response("Please log in.", 401)
@@ -594,6 +614,7 @@ def expense_list():
 @app.post("/api/expenses")
 @app.post("/api/expenses/<int:entry_id>/edit")
 def save_expense(entry_id=None):
+    # Keep the expense and optional reminder in one save so an error cannot leave half an update.
     with closing(connect_db()) as db:
         if not signed_in_user_exists(db):
             return error_response("Please log in.", 401)
@@ -668,6 +689,7 @@ def delete_expense(entry_id):
 # monthly, and yearly limit. Editing a limit leaves past expenses alone.
 @app.get("/api/limits")
 def list_limits():
+    # Show the limits this account has set, including ones for other report periods.
     with closing(connect_db()) as db:
         if not signed_in_user_exists(db):
             return error_response("Please log in.", 401)
@@ -681,6 +703,7 @@ def list_limits():
 @app.post("/api/limits")
 @app.post("/api/limits/<int:limit_id>/edit")
 def save_limit(limit_id=None):
+    # A category can have a weekly, monthly, and yearly limit, but not two for the same period.
     with closing(connect_db()) as db:
         if not signed_in_user_exists(db):
             return error_response("Please log in.", 401)
@@ -714,6 +737,7 @@ def save_limit(limit_id=None):
 
 @app.post("/api/limits/<int:limit_id>/delete")
 def delete_limit(limit_id):
+    # Remove the limit only. The expenses it was compared with are still part of the account.
     with closing(connect_db()) as db, db:
         if not signed_in_user_exists(db):
             return error_response("Please log in.", 401)
@@ -731,6 +755,7 @@ def delete_limit(limit_id):
 # --------------------------------------------------------------------
 def report_window(period, anchor):
     """Find the calendar period. The end date is the first day of the next one."""
+    # Return the first day of this period and the first day of the next one.
     if period == "weekly":
         start = anchor - timedelta(days=anchor.weekday())
         return start, start + timedelta(days=7)
@@ -749,6 +774,7 @@ def report_window(period, anchor):
 
 @app.get("/api/dashboard/summary")
 def dashboard_summary():
+    # Build the overview from saved records rather than keeping a separate copy of the totals.
     db = connect_db()
     try:
         if not signed_in_user_exists(db):
@@ -859,14 +885,159 @@ def dashboard_summary():
 @app.get("/dashboard")
 @app.get("/api/dashboard")
 def dashboard():
+    # Keep older dashboard links working by sending them to the current PHP page.
     if "user_id" not in session:
         return redirect(LOGIN_PAGE)
     return redirect("http://localhost/practice/dashboard.php")
 
 
 # --------------------------------------------------------------------
+# statistics.php | Spending totals and charts
+# All three views use these same totals. Switching charts never changes saved data.
+# --------------------------------------------------------------------
+@app.get("/api/statistics")
+def spending_statistics():
+    # The PHP page draws the charts. Python only gathers the category amounts and counts.
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # Start with this account only, then add the chosen date range.
+        clauses, values = ["user_id = ?"], [session["user_id"]]
+        start = end = None
+        try:
+            period = request.args.get("period", "monthly")
+            # Custom dates include both days. Calendar reports use the same
+            # Monday-to-Sunday weeks and month/year boundaries as the dashboard.
+            if period == "custom":
+                start = calendar_date(request.args.get("start", ""))
+                end = calendar_date(request.args.get("end", ""))
+                if start > end:
+                    raise ValueError(
+                        "The start date must be on or before the end date."
+                    )
+                clauses.extend(["expense_date >= ?", "expense_date <= ?"])
+                values.extend([start.isoformat(), end.isoformat()])
+            elif period != "all":
+                anchor = calendar_date(
+                    request.args.get("date", date.today().isoformat())
+                )
+                start, next_start = report_window(period, anchor)
+                end = next_start - timedelta(days=1)
+                clauses.extend(["expense_date >= ?", "expense_date < ?"])
+                values.extend([start.isoformat(), next_start.isoformat()])
+        except ValueError as error:
+            return error_response(str(error))
+        # Read one grouped result so totals and chart slices always agree.
+        rows = [
+            dict(row)
+            for row in db.execute(
+                "SELECT category, COUNT(*) AS count, SUM(amount_cents) AS amount_cents FROM expenses WHERE "
+                + " AND ".join(clauses)
+                + " GROUP BY category ORDER BY amount_cents DESC, category",
+                values,
+            )
+        ]
+        # Add the category totals to get the overall spending and entry count.
+        total = sum(row["amount_cents"] for row in rows)
+        count = sum(row["count"] for row in rows)
+        # The percentage is used for labels. Chart sizes use the exact cents.
+        for row in rows:
+            row["percentage"] = (
+                round(row["amount_cents"] / total * 100, 2) if total else 0
+            )
+        # An empty result tells statistics.php to ask for more spending data.
+        return jsonify(
+            success=True,
+            categories=rows,
+            total_cents=total,
+            count=count,
+            start=start.isoformat() if start else None,
+            end=end.isoformat() if end else None,
+            period=period,
+        )
+
+
+# --------------------------------------------------------------------
+# subscriptions.php | Manage expenses in the Subscriptions category
+# Use the existing expense rows so changes appear on both pages.
+# The billing date is the recorded expense date, not a generated future charge.
+# --------------------------------------------------------------------
+@app.get("/api/subscriptions")
+def list_subscriptions():
+    # Use category Subscriptions to find the rows, including ones entered on the Expenses page.
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        rows = db.execute(
+            """SELECT e.id, e.description AS name, e.amount_cents,
+                      e.expense_date AS billing_date,
+                      EXISTS(SELECT 1 FROM bills b WHERE b.expense_id=e.id AND b.user_id=e.user_id) AS has_bill
+               FROM expenses e WHERE e.user_id=? AND e.category='Subscriptions'
+               ORDER BY e.expense_date, e.id""",
+            (session["user_id"],),
+        )
+        return jsonify(success=True, subscriptions=[dict(row) for row in rows])
+
+
+@app.post("/api/subscriptions")
+@app.post("/api/subscriptions/<int:subscription_id>/edit")
+def save_subscription(subscription_id=None):
+    # This updates an expense, not a second subscription table, so the two pages stay in sync.
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # Check all three fields before inserting or changing a saved entry.
+        try:
+            name = form_text("name", "a subscription name", 200)
+            amount = money_cents(request.form.get("amount", ""))
+            billed = calendar_date(request.form.get("billing_date", "")).isoformat()
+        except ValueError as error:
+            return error_response(str(error))
+        uid = session["user_id"]
+        creating = subscription_id is None
+        with db:
+            if creating:
+                # Entries added here also appear as recurring subscription expenses.
+                subscription_id = db.execute(
+                    """INSERT INTO expenses (description,amount_cents,expense_date,category,is_recurring,user_id)
+                       VALUES (?,?,?,'Subscriptions',1,?)""",
+                    (name, amount, billed, uid),
+                ).lastrowid
+            else:
+                # Check both owner and category. A different expense must not be editable here.
+                changed = db.execute(
+                    """UPDATE expenses SET description=?,amount_cents=?,expense_date=?
+                       WHERE id=? AND user_id=? AND category='Subscriptions'""",
+                    (name, amount, billed, subscription_id, uid),
+                ).rowcount
+                if not changed:
+                    return error_response(
+                        "Subscription not found. Refresh the list.", 404
+                    )
+                # Bill reminders have their own amounts and due dates; manage them in Expenses.
+        return jsonify(success=True, id=subscription_id), 201 if creating else 200
+
+
+@app.post("/api/subscriptions/<int:subscription_id>/delete")
+def delete_subscription(subscription_id):
+    # The page asks for confirmation before calling this route because the expense is removed too.
+    with closing(connect_db()) as db, db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # This removes the shared expense too. Its linked bill reminder is removed by the database.
+        removed = db.execute(
+            "DELETE FROM expenses WHERE id=? AND user_id=? AND category='Subscriptions'",
+            (subscription_id, session["user_id"]),
+        ).rowcount
+        if not removed:
+            return error_response("Subscription not found. Refresh the list.", 404)
+        return jsonify(success=True)
+
+
+# --------------------------------------------------------------------
 # Tests | Run with python app.py --test
-# These checks cover dashboard totals, income, expenses, reminders, and spending limits.
+# These checks cover dashboard totals, income, expenses, reminders, spending limits,
+# statistics, and subscriptions. They run against temporary data.
 # --------------------------------------------------------------------
 
 
@@ -1373,6 +1544,221 @@ def run_dashboard_tests():
                     )
             self.assertEqual(self.report()["expense_cents"], 2650)
             self.assertEqual(len(self.report()["bills"]), 1)
+
+        # Statistics: check category totals, date ranges, and private account data.
+        def test_statistics(self):
+            self.assertEqual(
+                self.client.get("/api/statistics?period=all").json["count"], 0
+            )
+            for amount, category, day in [
+                ("20", "Food", "2026-10-01"),
+                ("40", "Food", "2026-10-29"),
+                ("40", "Gas", "2026-10-31"),
+                ("999", "Gas", "2026-11-01"),
+            ]:
+                self.expense(amount=amount, category=category, expense_date=day)
+            data = self.client.get(
+                "/api/statistics?period=monthly&date=2026-10-29"
+            ).json
+            self.assertEqual((data["total_cents"], data["count"]), (10000, 3))
+            self.assertEqual(
+                [(x["category"], x["percentage"]) for x in data["categories"]],
+                [("Food", 60.0), ("Gas", 40.0)],
+            )
+            self.assertEqual(
+                self.client.get("/api/statistics?period=weekly&date=2026-10-01").json[
+                    "total_cents"
+                ],
+                2000,
+            )
+            self.assertEqual(
+                self.client.get("/api/statistics?period=yearly&date=2026-10-01").json[
+                    "count"
+                ],
+                4,
+            )
+            self.assertEqual(
+                self.client.get(
+                    "/api/statistics?period=custom&start=2026-10-29&end=2026-10-29"
+                ).json["total_cents"],
+                4000,
+            )
+            for query in [
+                "period=wrong",
+                "period=custom&start=2026-11-01&end=2026-10-01",
+                "date=bad",
+                "period=custom",
+            ]:
+                self.assertEqual(
+                    self.client.get("/api/statistics?" + query).status_code, 400
+                )
+            anonymous = self.module.app.test_client()
+            self.assertEqual(anonymous.get("/api/statistics").status_code, 401)
+            with closing(self.module.connect_db()) as db, db:
+                uid = db.execute(
+                    "INSERT INTO users(email,password_hash) VALUES('stat@example.com','unused')"
+                ).lastrowid
+            with anonymous.session_transaction() as sess:
+                sess["user_id"] = uid
+            self.assertEqual(
+                anonymous.get("/api/statistics?period=all").json["total_cents"], 0
+            )
+
+        # Subscriptions share expense rows, so verify changes from both pages.
+        def subscription_post(self, path="/api/subscriptions", **changes):
+            fields = dict(
+                name="Music service", amount="12.99", billing_date="2026-10-29"
+            )
+            fields.update(changes)
+            token = self.client.get("/api/csrf").json["csrf_token"]
+            return self.client.post(path, data=fields, headers={"X-CSRF-Token": token})
+
+        def test_subscriptions_sync_and_dates(self):
+            self.assertEqual(
+                self.client.get("/api/subscriptions").json["subscriptions"], []
+            )
+            imported = self.expense(
+                category="Subscriptions",
+                description="Streaming",
+                amount="20",
+                expense_date="2026-10-01",
+            ).json["id"]
+            self.expense(category="Food")
+            created = self.subscription_post()
+            self.assertEqual(created.status_code, 201)
+            sid = created.json["id"]
+            rows = self.client.get("/api/subscriptions").json["subscriptions"]
+            self.assertEqual(
+                [r["billing_date"] for r in rows], ["2026-10-01", "2026-10-29"]
+            )
+            self.assertEqual(
+                self.subscription_post(
+                    f"/api/subscriptions/{sid}/edit",
+                    amount="15",
+                    name="Music Plus",
+                    billing_date="2026-11-03",
+                ).status_code,
+                200,
+            )
+            expenses = self.client.get("/api/expenses?category=Subscriptions").json[
+                "entries"
+            ]
+            changed = next(row for row in expenses if row["id"] == sid)
+            self.assertEqual(
+                (
+                    changed["description"],
+                    changed["amount_cents"],
+                    changed["is_recurring"],
+                ),
+                ("Music Plus", 1500, 1),
+            )
+            self.expense(
+                f"/api/expenses/{imported}/edit",
+                category="Subscriptions",
+                description="New name",
+                amount="25",
+                expense_date="2026-10-02",
+                has_bill="1",
+                bill_name="Next payment",
+                bill_amount="25",
+                bill_due="2026-11-02",
+            )
+            self.assertEqual(
+                self.client.get("/api/subscriptions").json["subscriptions"][0]["name"],
+                "New name",
+            )
+            self.subscription_post(f"/api/subscriptions/{imported}/edit")
+            with closing(self.module.connect_db()) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT due_date FROM bills WHERE expense_id=?", (imported,)
+                    ).fetchone()[0],
+                    "2026-11-02",
+                )
+            self.assertEqual(
+                self.subscription_post(
+                    f"/api/subscriptions/{imported}/delete"
+                ).status_code,
+                200,
+            )
+            with closing(self.module.connect_db()) as db:
+                self.assertIsNone(
+                    db.execute(
+                        "SELECT id FROM bills WHERE expense_id=?", (imported,)
+                    ).fetchone()
+                )
+            self.assertEqual(
+                self.subscription_post(f"/api/subscriptions/{sid}/delete").status_code,
+                200,
+            )
+            self.assertEqual(
+                self.client.get("/api/subscriptions").json["subscriptions"], []
+            )
+            self.assertEqual(self.report()["expense_cents"], 2650)
+
+        def test_subscription_validation_and_privacy(self):
+            for change in [
+                dict(name=" "),
+                dict(name="x" * 201),
+                dict(amount="abc"),
+                dict(amount="0"),
+                dict(amount="-1"),
+                dict(amount="1.234"),
+                dict(billing_date=""),
+                dict(billing_date="2026-02-30"),
+            ]:
+                self.assertEqual(self.subscription_post(**change).status_code, 400)
+            self.assertEqual(
+                self.client.get("/api/subscriptions").json["subscriptions"], []
+            )
+            sid = self.subscription_post().json["id"]
+            self.assertEqual(
+                self.subscription_post(
+                    f"/api/subscriptions/{sid}/edit", amount="bad"
+                ).status_code,
+                400,
+            )
+            self.assertEqual(
+                self.client.get("/api/subscriptions").json["subscriptions"][0][
+                    "amount_cents"
+                ],
+                1299,
+            )
+            food = self.expense(category="Food").json["id"]
+            for action in ("edit", "delete"):
+                self.assertEqual(
+                    self.subscription_post(
+                        f"/api/subscriptions/{food}/{action}"
+                    ).status_code,
+                    404,
+                )
+            guest = self.module.app.test_client()
+            self.assertEqual(guest.get("/api/subscriptions").status_code, 401)
+            token = guest.get("/api/csrf").json["csrf_token"]
+            self.assertEqual(
+                guest.post(
+                    "/api/subscriptions", headers={"X-CSRF-Token": token}
+                ).status_code,
+                401,
+            )
+            self.assertEqual(self.client.post("/api/subscriptions").status_code, 403)
+            with closing(self.module.connect_db()) as db, db:
+                uid = db.execute(
+                    "INSERT INTO users(email,password_hash) VALUES('sub@example.com','unused')"
+                ).lastrowid
+            with guest.session_transaction() as sess:
+                sess["user_id"] = uid
+            self.assertEqual(guest.get("/api/subscriptions").json["subscriptions"], [])
+            fields = dict(name="Other", amount="1", billing_date="2026-10-29")
+            for action in ("edit", "delete"):
+                self.assertEqual(
+                    guest.post(
+                        f"/api/subscriptions/{sid}/{action}",
+                        data=fields,
+                        headers={"X-CSRF-Token": token},
+                    ).status_code,
+                    404,
+                )
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(DashboardTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
