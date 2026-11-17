@@ -617,8 +617,8 @@ td {
             <a href="expenses.php">Expenses</a>
             <a href="statistics.php">Statistics</a>
             <a href="subscriptions.php">Subscriptions</a>
-            <span class="nav-placeholder" aria-disabled="true">Savings goals <small>Later</small></span>
-            <span class="nav-placeholder" aria-disabled="true">Account management <small>Later</small></span>
+            <a href="goals.php">Goals</a>
+            <a href="account.php">Account management</a>
         </nav>
         <div class="sidebar-bottom">
             <p><br></p>
@@ -663,7 +663,7 @@ td {
     <article class="metric accent"><p class="metric-label">Money remaining</p><h2 id="remaining-total" class="metric-value">—</h2><p class="metric-note">Recorded income minus expenses</p></article>
 </section>
 <div class="dashboard-grid">
-    <section class="panel"><div class="panel-heading"><h2>Savings goals</h2></div><p class="hint">Current progress · independent of report period</p><div id="goals-list"></div></section>
+    <section class="panel"><div class="panel-heading"><h2>Savings goals</h2><a href="goals.php">Manage goals</a></div><p class="hint">Active goals · current savings, independent of report period</p><div id="goals-list"></div></section>
     <section class="panel"><div class="panel-heading"><h2>Spending limits</h2></div><p class="hint">Category spending against your selected period’s limits</p><div id="limits-list"></div></section>
     <section class="panel"><div class="panel-heading"><h2>Upcoming bills</h2></div><p id="bills-window" class="hint">Unpaid bills due within 30 days of the selected date</p><p id="overdue-note" class="hint danger" hidden></p><div id="bills-list"></div></section>
     <section class="panel"><div class="panel-heading"><h2>Where your money goes</h2></div><p class="hint">Recorded expenses by category</p><div id="category-list"></div></section>
@@ -744,11 +744,38 @@ async function post(path, data) {
   });
 }
 // Check the login before loading this account’s information.
+// Free accounts see a sample ad. No ad network or tracking scripts are loaded.
+// Refreshing membership also updates this when another tab changes the plan.
+function showMembershipAd(membership) {
+  let ad = document.getElementById("membership-ad");
+  if (!ad) {
+    ad = document.createElement("aside");
+    ad.id = "membership-ad";
+    ad.className = "notice info";
+    ad.setAttribute("aria-label", "Advertisement");
+    ad.textContent = "Sample advertisement space · Demo sponsor placement. Premium removes advertisements.";
+    ad.style.cssText = "margin:20px 0;padding:24px;border:2px dashed #94a3b8;border-radius:12px;text-align:center;background:#f8fafc;color:#334155";
+    document.getElementById("page-content").prepend(ad);
+  }
+  ad.hidden = membership.is_premium;
+}
 const sessionReady = api("/api/account").then((account) => {
+  showMembershipAd(account.membership);
   document.getElementById("account-label").textContent = account.email;
   document.getElementById("page-content").hidden = false;
   document.getElementById("page-status").hidden = true;
   return account;
+});
+// Recheck on return so cancellation or expiry in another tab is reflected here.
+window.addEventListener("storage", event => {
+  if (event.key === "budgetbuddy-membership-change") window.dispatchEvent(new Event("focus"));
+});
+window.addEventListener("focus", () => {
+  api("/api/account").then(account => {
+    document.getElementById("account-label").textContent = account.email;
+    showMembershipAd(account.membership);
+    if (typeof renderMembership === "function") renderMembership(account.membership);
+  }).catch(showError);
 });
 sessionReady.catch((error) => {
   document.getElementById("page-status").textContent =
@@ -845,14 +872,14 @@ function renderReport(data) {
       goal.name,
       goal.saved_cents,
       goal.target_cents,
-      `${percent}% saved${percent >= 100 ? " · Goal reached" : ""}`,
+      `${percent}% saved${goal.target_date ? " · Target: " + calendarLabel(goal.target_date) : ""}`,
     );
   }
   if (!data.goals.length)
     emptyState(
       goals,
-      "Give your savings a purpose",
-      "Saved goals will appear here when the savings section is connected.",
+      "No active savings goals",
+      "Create a goal on the Goals page. Completed goals stay there for you to review.",
     );
 
   const limits = document.getElementById("limits-list");

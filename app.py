@@ -5,12 +5,16 @@ Run python app.py, then open http://localhost/practice/login.php.
 
 # Page guide: search for a PHP filename below to find its Python routes.
 # account_creation.php and login.php handle sign-up and sign-in.
-# income.php and expenses.php save entries; dashboard.php reads their totals.
+# income.php and expenses.php save entries, dashboard.php reads their totals.
 # statistics.php groups saved expenses into category totals for its three views.
 # subscriptions.php manages the expense rows marked as Subscriptions.
+# account.php manages profile changes and the local Premium demo.
+# goals.php stores savings targets and the amounts users have set aside.
 
 # App settings
 import re
+import csv
+import io
 from contextlib import closing
 import secrets
 import sqlite3
@@ -20,6 +24,7 @@ from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     jsonify,
     redirect,
     request,
@@ -89,6 +94,15 @@ def initialize_database():
                     password_hash TEXT NOT NULL
                 )
             """)
+            # Account settings: Add membership fields without touching saved finances.
+            # The expiry date is the first day without access after cancellation.
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)")}
+            for name, definition in {
+                "premium_until": "TEXT",
+                "premium_cancelled": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
             # Keep income in its own table, tied to the account that entered it.
             # Whole cents avoid the rounding errors that can happen with floats.
             connection.execute("""
@@ -136,6 +150,11 @@ def initialize_finance_tables():
                 name TEXT NOT NULL, target_cents INTEGER NOT NULL CHECK(target_cents > 0),
                 saved_cents INTEGER NOT NULL CHECK(saved_cents >= 0)
             )""")
+            # Older goals did not have a target date. Leave their date blank on upgrade.
+            if "target_date" not in {
+                row["name"] for row in db.execute("PRAGMA table_info(savings_goals)")
+            }:
+                db.execute("ALTER TABLE savings_goals ADD COLUMN target_date TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS spending_limits (
                 id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
                 category TEXT NOT NULL, period TEXT NOT NULL,
@@ -172,6 +191,9 @@ def add_demo_account():
     connection = connect_db()
     try:
         with connection:
+            # Seed only a fresh database. Renaming the demo account must not recreate it.
+            if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+                return
             # Save a hash instead of the actual password.
             # Leave the account alone if this email is already in the database.
             connection.execute(
@@ -269,7 +291,7 @@ def too_large(error):
 
 
 # --------------------------------------------------------------------
-# account_creation.php | Create an account
+# account_creation.php: Create an account
 # The registration form posts here. On success, the page sends the user to login.php.
 # --------------------------------------------------------------------
 @app.post("/api/register")
@@ -311,7 +333,7 @@ def create_account():
 
 
 # --------------------------------------------------------------------
-# login.php | Sign in
+# login.php: Sign in
 # A failed login returns a message for the form. A successful one starts the session.
 # --------------------------------------------------------------------
 @app.post("/login")  # Keep the old login address working too.
@@ -353,22 +375,148 @@ def login():
 
 
 # --------------------------------------------------------------------
-# Shared account routes | Check the session and log out
+# Shared account routes: Check the session and log out
 # Dashboard, Income, and Expenses check the session before loading private records.
 # --------------------------------------------------------------------
 @app.get("/api/account")
 def account_details():
-    # Only return the email needed by the page header. Never send back the password hash.
+    # Return the email and membership for the page header. Never expose the password hash.
     db = connect_db()
     try:
         if not signed_in_user_exists(db):
             return error_response("Please log in.", 401)
         user = db.execute(
-            "SELECT email FROM users WHERE id = ?", (session["user_id"],)
+            "SELECT * FROM users WHERE id = ?", (session["user_id"],)
         ).fetchone()
-        return jsonify(success=True, email=user["email"])
+        return jsonify(success=True, email=user["email"], membership=membership_status(db, user))
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------
+# account.php: Update email and password
+# Check the whole form first. A bad password or email must not save half an update.
+# --------------------------------------------------------------------
+@app.post("/api/account/update")
+def update_account():
+    email = submitted_email()
+    current = request.form.get("current_password", "")
+    password = request.form.get("new_password", "")
+    confirmation = request.form.get("confirm_password", "")
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+        if not check_password_hash(user["password_hash"], current):
+            return error_response("Your current password is incorrect.")
+        if not valid_email(email):
+            return error_response("Please enter a valid email address.")
+        if password or confirmation:
+            if not valid_password_length(password) or not password.strip():
+                return error_response("Your new password must contain 8 to 128 characters and cannot be only spaces.")
+            if password != confirmation:
+                return error_response("The new passwords do not match.")
+            # A new password should actually change the account's password.
+            # Compare against the saved hash, never against plain text in the database.
+            if check_password_hash(user["password_hash"], password):
+                return error_response("Your new password must be different from your current password.")
+        # Compare email addresses without case, including accounts from older databases.
+        if db.execute("SELECT id FROM users WHERE lower(email)=? AND id<>?", (email, user["id"])).fetchone():
+            return error_response("This email is already in use.", 409)
+        password_hash = generate_password_hash(password) if password else user["password_hash"]
+        try:
+            with db:
+                db.execute("UPDATE users SET email=?, password_hash=? WHERE id=?",
+                           (email, password_hash, user["id"]))
+        except sqlite3.IntegrityError:
+            return error_response("This email is already in use.", 409)
+    session["email"] = email
+    return jsonify(success=True, email=email, message="Your account details have been saved.")
+
+
+# --------------------------------------------------------------------
+# account.php: Demo Premium membership
+# There is no payment service here. Periods renew locally without charging anyone.
+# Cancel stops the next renewal; access lasts through the current 30-day period.
+# --------------------------------------------------------------------
+def membership_status(db, user, today=None):
+    today = today or date.today()
+    until = date.fromisoformat(user["premium_until"]) if user["premium_until"] else None
+    cancelled = bool(user["premium_cancelled"])
+    if until and until <= today and not cancelled:
+        # Catch up after time away without creating duplicate memberships.
+        until += timedelta(days=((today - until).days // 30 + 1) * 30)
+        with db:
+            db.execute("UPDATE users SET premium_until=? WHERE id=?", (until.isoformat(), user["id"]))
+    active = bool(until and until > today)
+    return dict(is_premium=active, expires_on=until.isoformat() if until else None,
+                cancel_at_period_end=cancelled, demo=True,
+                status="Premium" if active else "Free")
+
+
+@app.post("/api/account/premium/<action>")
+def manage_premium(action):
+    if action not in ("subscribe", "cancel", "enable", "disable"):
+        return error_response("Choose a valid membership action.", 404)
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # Serialize repeated clicks so they cannot add extra months.
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+            until = date.fromisoformat(user["premium_until"]) if user["premium_until"] else None
+            today = date.today()
+            if until and until <= today and not user["premium_cancelled"]:
+                until += timedelta(days=((today - until).days // 30 + 1) * 30)
+            # Demo controls switch perks immediately. Cancel still waits until expiry.
+            if action == "disable":
+                until = today
+                cancelled = 1
+            elif action in ("subscribe", "enable"):
+                if not until or until <= today:
+                    until = today + timedelta(days=30)
+                cancelled = 0
+            else:
+                if not until or until <= today:
+                    return error_response("There is no active Premium membership to cancel.")
+                cancelled = 1
+            db.execute("UPDATE users SET premium_until=?, premium_cancelled=? WHERE id=?",
+                       (until.isoformat(), cancelled, user["id"]))
+        user = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+        return jsonify(success=True, membership=membership_status(db, user))
+
+
+# Premium export | Check access in Python, even if someone opens the URL directly.
+@app.get("/api/account/export")
+def export_finances():
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+        if not membership_status(db, user)["is_premium"]:
+            return error_response("CSV export is available with demo Premium.", 403)
+        rows = db.execute("""
+            SELECT 'Income' AS kind, income_date AS day, source AS description,
+                   category, amount_cents, is_recurring FROM incomes WHERE user_id=?
+            UNION ALL
+            SELECT 'Expense', expense_date, description, category, amount_cents,
+                   is_recurring FROM expenses WHERE user_id=? ORDER BY day
+        """, (user["id"], user["id"])).fetchall()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Type", "Date", "Description", "Category", "Amount", "Recurring"])
+    for row in rows:
+        # Spreadsheet programs can treat typed text as a formula. Keep it as text.
+        def cell(value):
+            value = str(value)
+            return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")) else value
+        cents = row["amount_cents"]
+        writer.writerow([row["kind"], row["day"], cell(row["description"]),
+                         cell(row["category"]), f"{cents // 100}.{cents % 100:02d}",
+                         "Yes" if row["is_recurring"] else "No"])
+    return Response(output.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="budgetbuddy-finances.csv"'})
 
 
 @app.post("/logout")
@@ -452,7 +600,7 @@ def record_filters(date_column, prefix=""):
 
 
 # --------------------------------------------------------------------
-# income.php | List, add, edit, and delete income
+# income.php: List, add, edit, and delete income
 # Filters choose which rows to show. Clearing a filter does not change any saved entry.
 # --------------------------------------------------------------------
 @app.get("/api/income")
@@ -544,7 +692,7 @@ def delete_income(entry_id):
 
 
 # --------------------------------------------------------------------
-# expenses.php | Expenses, bill reminders, and spending limits
+# expenses.php: Expenses, bill reminders, and spending limits
 # The expense form records spending. An optional reminder tracks when a bill is due.
 # --------------------------------------------------------------------
 CATEGORIES = (
@@ -750,7 +898,7 @@ def delete_limit(limit_id):
 
 
 # --------------------------------------------------------------------
-# dashboard.php | Financial overview
+# dashboard.php: Financial overview
 # The selected date and period determine which income and expenses count toward the totals.
 # --------------------------------------------------------------------
 def report_window(period, anchor):
@@ -805,10 +953,11 @@ def dashboard_summary():
         ]
         # Match each spending limit to the category total for this report.
         spent = {row["category"]: row["amount_cents"] for row in categories}
+        # Completed goals stay on Goals, but only unfinished ones appear on the dashboard.
         goals = [
             dict(row)
             for row in db.execute(
-                "SELECT id, name, target_cents, saved_cents FROM savings_goals WHERE user_id = ? ORDER BY id",
+                "SELECT id, name, target_cents, saved_cents, target_date FROM savings_goals WHERE user_id = ? AND saved_cents < target_cents ORDER BY id",
                 (uid,),
             )
         ]
@@ -892,7 +1041,7 @@ def dashboard():
 
 
 # --------------------------------------------------------------------
-# statistics.php | Spending totals and charts
+# statistics.php: Spending totals and charts
 # All three views use these same totals. Switching charts never changes saved data.
 # --------------------------------------------------------------------
 @app.get("/api/statistics")
@@ -958,7 +1107,7 @@ def spending_statistics():
 
 
 # --------------------------------------------------------------------
-# subscriptions.php | Manage expenses in the Subscriptions category
+# subscriptions.php: Manage expenses in the Subscriptions category
 # Use the existing expense rows so changes appear on both pages.
 # The billing date is the recorded expense date, not a generated future charge.
 # --------------------------------------------------------------------
@@ -1035,7 +1184,75 @@ def delete_subscription(subscription_id):
 
 
 # --------------------------------------------------------------------
-# Tests | Run with python app.py --test
+# goals.php: Create goals and keep their progress up to date
+# Amount saved is entered by the user. It does not move money or add an expense.
+# Reaching the target completes the goal; completed goals remain editable here.
+# --------------------------------------------------------------------
+@app.get("/api/goals")
+def list_goals():
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # Keep completed goals so users can still review, edit, or delete them.
+        rows = db.execute(
+            """SELECT id,name,target_cents,saved_cents,target_date FROM savings_goals
+               WHERE user_id=? ORDER BY (saved_cents >= target_cents), id DESC""",
+            (session["user_id"],),
+        )
+        return jsonify(success=True, goals=[dict(row) for row in rows])
+
+
+@app.post("/api/goals")
+@app.post("/api/goals/<int:goal_id>/edit")
+def save_goal(goal_id=None):
+    with closing(connect_db()) as db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # Check every field first. An invalid target must not partially update a goal.
+        try:
+            name = form_text("name", "a goal name", 120)
+            target = money_cents(request.form.get("target_amount", ""))
+            saved = money_cents(request.form.get("saved_amount", "0"), allow_zero=True)
+            raw_date = request.form.get("target_date", "").strip()
+            target_date = calendar_date(raw_date).isoformat() if raw_date else None
+        except ValueError as error:
+            return error_response(str(error))
+        fields = (name, target, saved, target_date, session["user_id"])
+        creating = goal_id is None
+        with db:
+            if creating:
+                goal_id = db.execute(
+                    "INSERT INTO savings_goals(name,target_cents,saved_cents,target_date,user_id) VALUES(?,?,?,?,?)",
+                    fields,
+                ).lastrowid
+            else:
+                # Include the account ID so guessing another goal's ID cannot change it.
+                changed = db.execute(
+                    "UPDATE savings_goals SET name=?,target_cents=?,saved_cents=?,target_date=? WHERE user_id=? AND id=?",
+                    (*fields, goal_id),
+                ).rowcount
+                if not changed:
+                    return error_response("Goal not found. Refresh the list.", 404)
+        return jsonify(success=True, id=goal_id), 201 if creating else 200
+
+
+@app.post("/api/goals/<int:goal_id>/delete")
+def delete_goal(goal_id):
+    with closing(connect_db()) as db, db:
+        if not signed_in_user_exists(db):
+            return error_response("Please log in.", 401)
+        # Removing a goal does not remove any income or expense records.
+        changed = db.execute(
+            "DELETE FROM savings_goals WHERE user_id=? AND id=?",
+            (session["user_id"], goal_id),
+        ).rowcount
+        if not changed:
+            return error_response("Goal not found. Refresh the list.", 404)
+        return jsonify(success=True)
+
+
+# --------------------------------------------------------------------
+# Tests: Run with python app.py --test
 # These checks cover dashboard totals, income, expenses, reminders, spending limits,
 # statistics, and subscriptions. They run against temporary data.
 # --------------------------------------------------------------------
@@ -1759,6 +1976,190 @@ def run_dashboard_tests():
                     ).status_code,
                     404,
                 )
+
+        # Goals: exercise both a dated goal and one with no deadline.
+        def goal_post(self, path="/api/goals", **changes):
+            data = dict(
+                name="New car", target_amount="1000", saved_amount="250", target_date=""
+            )
+            data.update(changes)
+            token = self.client.get("/api/csrf").json["csrf_token"]
+            return self.client.post(path, data=data, headers={"X-CSRF-Token": token})
+
+        def test_goals_progress_and_changes(self):
+            self.assertEqual(self.client.get("/api/goals").json["goals"], [])
+            added = self.goal_post()
+            self.assertEqual(added.status_code, 201)
+            gid = added.json["id"]
+            self.assertIsNone(self.report()["goals"][0]["target_date"])
+            self.assertEqual(self.report()["goals"][0]["saved_cents"], 25000)
+            self.assertEqual(
+                self.goal_post(
+                    f"/api/goals/{gid}/edit",
+                    name="Car fund",
+                    saved_amount="500",
+                    target_date="2027-06-01",
+                ).status_code,
+                200,
+            )
+            goal = self.report()["goals"][0]
+            self.assertEqual(
+                (goal["name"], goal["target_date"], goal["saved_cents"]),
+                ("Car fund", "2027-06-01", 50000),
+            )
+            for amount in ("1000", "1200"):
+                self.goal_post(f"/api/goals/{gid}/edit", saved_amount=amount)
+                self.assertEqual(self.report()["goals"], [])
+                self.assertEqual(len(self.client.get("/api/goals").json["goals"]), 1)
+            self.goal_post(
+                f"/api/goals/{gid}/edit", target_amount="2000", saved_amount="1200"
+            )
+            self.assertEqual(len(self.report()["goals"]), 1)
+            # Tracking savings must not turn it into income or spending.
+            self.assertEqual(
+                (self.report()["income_cents"], self.report()["expense_cents"]), (0, 0)
+            )
+            self.assertEqual(
+                self.goal_post(f"/api/goals/{gid}/delete").status_code, 200
+            )
+            self.assertEqual(self.client.get("/api/goals").json["goals"], [])
+
+        def test_goals_validation_and_privacy(self):
+            for fields in [
+                dict(name=" "),
+                dict(name="a" * 121),
+                dict(target_amount=""),
+                dict(target_amount="0"),
+                dict(target_amount="-1"),
+                dict(target_amount="abc"),
+                dict(target_amount="1.234"),
+                dict(saved_amount="-1"),
+                dict(saved_amount="NaN"),
+                dict(target_date="2027-02-30"),
+            ]:
+                self.assertEqual(self.goal_post(**fields).status_code, 400)
+            self.assertEqual(self.client.get("/api/goals").json["goals"], [])
+            gid = self.goal_post(saved_amount="0").json["id"]
+            self.assertEqual(
+                self.goal_post(
+                    f"/api/goals/{gid}/edit", target_amount="bad"
+                ).status_code,
+                400,
+            )
+            self.assertEqual(self.report()["goals"][0]["saved_cents"], 0)
+            guest = self.module.app.test_client()
+            self.assertEqual(guest.get("/api/goals").status_code, 401)
+            token = guest.get("/api/csrf").json["csrf_token"]
+            self.assertEqual(
+                guest.post("/api/goals", headers={"X-CSRF-Token": token}).status_code,
+                401,
+            )
+            self.assertEqual(self.client.post("/api/goals").status_code, 403)
+            with closing(self.module.connect_db()) as db, db:
+                uid = db.execute(
+                    "INSERT INTO users(email,password_hash) VALUES('goal@example.com','unused')"
+                ).lastrowid
+            with guest.session_transaction() as sess:
+                sess["user_id"] = uid
+            self.assertEqual(guest.get("/api/goals").json["goals"], [])
+            for action in ("edit", "delete"):
+                self.assertEqual(
+                    guest.post(
+                        f"/api/goals/{gid}/{action}",
+                        data=dict(
+                            name="Private", target_amount="100", saved_amount="0"
+                        ),
+                        headers={"X-CSRF-Token": token},
+                    ).status_code,
+                    404,
+                )
+            self.assertEqual(len(self.report()["goals"]), 1)
+
+        # Account settings: Check failures leave the old email and password in place.
+        def account_post(self, path, **data):
+            token = self.client.get("/api/csrf").json["csrf_token"]
+            return self.client.post(path, data=data, headers={"X-CSRF-Token": token})
+
+        def test_account_updates(self):
+            path = "/api/account/update"
+            data = dict(email="new@example.com", current_password="Test123!",
+                        new_password="Changed123!", confirm_password="different")
+            self.assertEqual(self.account_post(path, **data).status_code, 400)
+            self.assertEqual(self.client.get("/api/account").json["email"], "admin@admin.com")
+            data.update(confirm_password="Changed123!", current_password="wrong")
+            self.assertEqual(self.account_post(path, **data).status_code, 400)
+            data.update(current_password="Test123!", email="invalid")
+            self.assertEqual(self.account_post(path, **data).status_code, 400)
+            with closing(self.module.connect_db()) as db, db:
+                db.execute("INSERT INTO users(email,password_hash) VALUES('taken@example.com','unused')")
+            data["email"] = "TAKEN@example.com"
+            self.assertEqual(self.account_post(path, **data).status_code, 409)
+            data["email"] = "new@example.com"
+            self.assertEqual(self.account_post(path, **data).status_code, 200)
+            self.assertEqual(self.client.get("/api/account").json["email"], "new@example.com")
+            self.assertEqual(self.account_post("/api/login", email="new@example.com", password="Test123!").status_code, 401)
+            self.assertEqual(self.account_post("/api/login", email="new@example.com", password="Changed123!").status_code, 200)
+            self.assertEqual(self.account_post(path, email="next@example.com",
+                             current_password="Changed123!").status_code, 200)
+
+        def test_same_password_and_demo_toggle(self):
+            response = self.account_post("/api/account/update", email="unchanged@example.com",
+                current_password="Test123!", new_password="Test123!", confirm_password="Test123!")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("different", response.json["message"])
+            self.assertEqual(self.client.get("/api/account").json["email"], "admin@admin.com")
+            for action, active in (("enable", True), ("disable", False), ("disable", False), ("enable", True)):
+                result = self.account_post("/api/account/premium/" + action)
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.json["membership"]["is_premium"], active)
+                self.assertEqual(self.client.get("/api/account/export").status_code, 200 if active else 403)
+            guest = self.module.app.test_client()
+            token = guest.get("/api/csrf").json["csrf_token"]
+            for action in ("enable", "disable"):
+                path = "/api/account/premium/" + action
+                self.assertEqual(guest.post(path, headers={"X-CSRF-Token":token}).status_code, 401)
+                self.assertEqual(self.client.post(path).status_code, 403)
+
+        # Premium: Cancellation keeps today's access, but expires at the period boundary.
+        def test_membership_lifecycle_and_export(self):
+            self.assertEqual(self.client.get("/api/account/export").status_code, 403)
+            result = self.account_post("/api/account/premium/subscribe").json["membership"]
+            self.assertTrue(result["is_premium"])
+            expires = result["expires_on"]
+            self.assertEqual(self.account_post("/api/account/premium/subscribe").json["membership"]["expires_on"], expires)
+            self.assertEqual(self.client.get("/api/account/export").status_code, 200)
+            result = self.account_post("/api/account/premium/cancel").json["membership"]
+            self.assertTrue(result["is_premium"])
+            self.assertTrue(result["cancel_at_period_end"])
+            with closing(self.module.connect_db()) as db, db:
+                db.execute("UPDATE users SET premium_until=? WHERE id=?",
+                           (date.today().isoformat(), self.user_id))
+            self.assertFalse(self.client.get("/api/account").json["membership"]["is_premium"])
+            self.assertEqual(self.client.get("/api/account/export").status_code, 403)
+            self.assertTrue(self.account_post("/api/account/premium/subscribe").json["membership"]["is_premium"])
+            with closing(self.module.connect_db()) as db, db:
+                db.execute("UPDATE users SET premium_until=? WHERE id=?",
+                           ((date.today()-timedelta(days=65)).isoformat(), self.user_id))
+            self.assertTrue(self.client.get("/api/account").json["membership"]["is_premium"])
+
+        # Private account routes must still require a login and a valid form token.
+        def test_account_access_and_export_scope(self):
+            guest = self.module.app.test_client()
+            self.assertEqual(guest.get("/api/account").status_code, 401)
+            self.assertEqual(guest.get("/api/account/export").status_code, 401)
+            token = guest.get("/api/csrf").json["csrf_token"]
+            for path in ("/api/account/update", "/api/account/premium/subscribe", "/api/account/premium/cancel"):
+                self.assertEqual(guest.post(path, headers={"X-CSRF-Token":token}).status_code, 401)
+                self.assertEqual(self.client.post(path).status_code, 403)
+            with closing(self.module.connect_db()) as db, db:
+                other = db.execute("INSERT INTO users(email,password_hash) VALUES('private@example.com','unused')").lastrowid
+                for uid, source in ((other, "Secret"), (self.user_id, "=FORMULA")):
+                    db.execute("INSERT INTO incomes(user_id,amount_cents,source,income_date) VALUES(?,123,?,'2026-11-17')", (uid,source))
+            self.account_post("/api/account/premium/subscribe")
+            output = self.client.get("/api/account/export").text
+            self.assertNotIn("Secret", output)
+            self.assertIn("'=FORMULA", output)
+            self.assertIn("1.23", output)
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(DashboardTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

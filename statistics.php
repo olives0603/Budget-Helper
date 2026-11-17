@@ -14,8 +14,8 @@ $navigation = [
     "expenses" => ["Expenses", "expenses.php"],
     "statistics" => ["Statistics", "statistics.php"],
     "subscriptions" => ["Subscriptions", "subscriptions.php"],
-    "goals" => ["Savings goals", null],
-    "account" => ["Account management", null],
+    "goals" => ["Goals", "goals.php"],
+    "account" => ["Account management", "account.php"],
 ];
 
 // Escape text before placing it in HTML so it cannot become a tag or attribute.
@@ -767,11 +767,38 @@ async function post(path, data) {
   });
 }
 // Check the login before loading this account’s information.
+// Free accounts see a sample ad. No ad network or tracking scripts are loaded.
+// Refreshing membership also updates this when another tab changes the plan.
+function showMembershipAd(membership) {
+  let ad = document.getElementById("membership-ad");
+  if (!ad) {
+    ad = document.createElement("aside");
+    ad.id = "membership-ad";
+    ad.className = "notice info";
+    ad.setAttribute("aria-label", "Advertisement");
+    ad.textContent = "Sample advertisement space · Demo sponsor placement. Premium removes advertisements.";
+    ad.style.cssText = "margin:20px 0;padding:24px;border:2px dashed #94a3b8;border-radius:12px;text-align:center;background:#f8fafc;color:#334155";
+    document.getElementById("page-content").prepend(ad);
+  }
+  ad.hidden = membership.is_premium;
+}
 const sessionReady = api("/api/account").then((account) => {
+  showMembershipAd(account.membership);
   document.getElementById("account-label").textContent = account.email;
   document.getElementById("page-content").hidden = false;
   document.getElementById("page-status").hidden = true;
   return account;
+});
+// Recheck on return so cancellation or expiry in another tab is reflected here.
+window.addEventListener("storage", event => {
+  if (event.key === "budgetbuddy-membership-change") window.dispatchEvent(new Event("focus"));
+});
+window.addEventListener("focus", () => {
+  api("/api/account").then(account => {
+    document.getElementById("account-label").textContent = account.email;
+    showMembershipAd(account.membership);
+    if (typeof renderMembership === "function") renderMembership(account.membership);
+  }).catch(showError);
 });
 sessionReady.catch((error) => {
   document.getElementById("page-status").textContent =
